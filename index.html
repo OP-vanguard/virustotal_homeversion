@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IOC Extractor — Threat Triage Tool</title>
+<style>
+    :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #30363d;
+        --text: #c9d1d9;
+        --accent: #58a6ff;
+        --malicious: #c0392b;
+        --suspicious: #e67e22;
+        --low-risk: #f1c40f;
+        --clean: #27ae60;
+    }
+    * { box-sizing: border-box; }
+    body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Consolas', 'Courier New', monospace;
+        margin: 0;
+        padding: 30px;
+    }
+    h1 { color: var(--accent); font-size: 22px; }
+    .input-row {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+    }
+    input[type=text] {
+        flex: 1;
+        min-width: 300px;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 10px;
+        border-radius: 6px;
+        font-family: inherit;
+    }
+    input[type=file] { color: var(--text); }
+    button {
+        background: var(--accent);
+        color: #0d1117;
+        border: none;
+        padding: 10px 20px;
+        border-radius: 6px;
+        font-weight: bold;
+        cursor: pointer;
+    }
+    button:hover { opacity: 0.85; }
+    .verdict-badge {
+        display: inline-block;
+        padding: 10px 20px;
+        border-radius: 8px;
+        font-weight: bold;
+        margin-bottom: 20px;
+    }
+    .tabs {
+        display: flex;
+        gap: 4px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 15px;
+    }
+    .tab {
+        padding: 10px 16px;
+        cursor: pointer;
+        background: var(--panel);
+        border-radius: 6px 6px 0 0;
+        border: 1px solid var(--border);
+        border-bottom: none;
+    }
+    .tab.active { background: var(--bg); color: var(--accent); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 20px;
+    }
+    .technique-row {
+        border-bottom: 1px solid var(--border);
+        padding: 12px 0;
+        cursor: pointer;
+    }
+    .technique-row:hover { background: rgba(88,166,255,0.08); }
+    .steps { margin-top: 8px; padding-left: 20px; display: none; }
+    .steps.open { display: block; }
+    .steps h4 { color: var(--accent); margin: 8px 0 4px; }
+    ul { margin: 4px 0; padding-left: 20px; }
+    #status { color: var(--accent); margin-bottom: 10px; }
+</style>
+</head>
+<body>
+
+<h1>IOC Extractor — Threat Triage Tool</h1>
+
+<div class="input-row">
+    <input type="text" id="targetInput" placeholder="File path, hash, IP, or domain...">
+    <input type="file" id="fileInput">
+    <button onclick="runAnalysis()">Analyze</button>
+    <button onclick="clearForm()" style="background: var(--border); color: var(--text);">Clear</button>
+</div>
+
+<div id="status"></div>
+<div id="results" style="display:none;">
+    <div id="verdictBadge" class="verdict-badge"></div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="showTab('overview')">Overview</div>
+        <div class="tab" onclick="showTab('iocs')">Static IOCs</div>
+        <div class="tab" onclick="showTab('mitre')">MITRE ATT&CK</div>
+        <div class="tab" onclick="showTab('raw')">Raw JSON</div>
+    </div>
+
+    <div id="overview" class="tab-content active panel"></div>
+    <div id="iocs" class="tab-content panel"></div>
+    <div id="mitre" class="tab-content panel"></div>
+    <div id="raw" class="tab-content panel"><pre id="rawJson"></pre></div>
+</div>
+
+<script>
+const VERDICT_COLORS = {
+    "MALICIOUS": "var(--malicious)",
+    "SUSPICIOUS": "var(--suspicious)",
+    "LOW_RISK": "var(--low-risk)",
+    "CLEAN_NO_TECHNIQUE_MATCH": "var(--clean)",
+    "NOT_ANALYZED": "#7f8c8d"
+};
+
+function showTab(name) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelector(`.tab[onclick="showTab('${name}')"]`).classList.add('active');
+    document.getElementById(name).classList.add('active');
+}
+
+async function runAnalysis() {
+    const target = document.getElementById('targetInput').value.trim();
+    const fileInput = document.getElementById('fileInput');
+    const status = document.getElementById('status');
+    const results = document.getElementById('results');
+
+    if (!target && !fileInput.files.length) {
+        status.textContent = "Enter a target or choose a file first.";
+        return;
+    }
+
+    status.textContent = "Analyzing...";
+    results.style.display = "none";
+
+    const formData = new FormData();
+    if (fileInput.files.length) formData.append("file", fileInput.files[0]);
+    if (target) formData.append("target", target);
+
+    try {
+        const res = await fetch("/analyze", { method: "POST", body: formData });
+        const report = await res.json();
+
+        if (report.error) {
+            status.textContent = "Error: " + report.error;
+            return;
+        }
+
+        status.textContent = "Analysis complete.";
+        renderReport(report);
+        results.style.display = "block";
+    } catch (err) {
+        status.textContent = "Request failed: " + err;
+    }
+}
+
+function clearForm() {
+    document.getElementById('targetInput').value = "";
+    document.getElementById('fileInput').value = "";
+    document.getElementById('status').textContent = "";
+    document.getElementById('results').style.display = "none";
+    document.getElementById('verdictBadge').style.display = "none";
+}
+
+function renderReport(report) {
+    document.getElementById('rawJson').textContent = JSON.stringify(report, null, 2);
+
+    const ma = report.mitre_attack || {};
+    const badge = document.getElementById('verdictBadge');
+
+    // Overall verdict now applies uniformly to ALL target types (file, hash, ip, domain)
+    const verdict = report.overall_verdict || "NOT_ANALYZED";
+    const riskScore = report.overall_risk_score || 0;
+    badge.textContent = `${verdict} | Risk Score: ${riskScore}`;
+    badge.style.background = VERDICT_COLORS[verdict] || "#7f8c8d";
+    badge.style.display = "inline-block";
+
+    // Overview
+    let overviewHtml = `<b>Target type:</b> ${report.target_type}<br><br>`;
+    if (["file", "hash"].includes(report.target_type)) {
+        const fi = report.file_info || {};
+        overviewHtml += `<b>File:</b> ${fi.filepath}<br><b>SHA256:</b> ${fi.sha256}<br><br>`;
+    } else if (report.network_indicator) {
+        overviewHtml += `<b>${report.target_type.toUpperCase()}:</b> ${report.network_indicator.value}<br><br>`;
+    }
+    overviewHtml += "<b>VirusTotal:</b><br>";
+    const vt = report.virustotal || {};
+    if (vt.found === false) {
+        overviewHtml += vt.message || "No VT record.";
+    } else {
+        for (const [k, v] of Object.entries(vt)) {
+            overviewHtml += `&nbsp;&nbsp;${k}: ${Array.isArray(v) ? (v.join(", ") || "none") : v}<br>`;
+        }
+    }
+    document.getElementById('overview').innerHTML = overviewHtml;
+
+    // Static IOCs
+    let iocsHtml = "";
+    if (["file", "hash"].includes(report.target_type) && report.static_iocs) {
+        const iocs = report.static_iocs;
+        const labels = {
+            ips: "IPs", urls: "URLs", domains: "Domains",
+            suspicious_apis: "Suspicious APIs",
+            registry_keys: "Registry Keys",
+            suspicious_paths: "Suspicious Paths"
+        };
+        for (const [key, label] of Object.entries(labels)) {
+            const items = iocs[key] || [];
+            iocsHtml += `<b>${label} (${items.length}):</b><ul>`;
+            iocsHtml += items.length ? items.map(i => `<li>${i}</li>`).join("") : "<li>none</li>";
+            iocsHtml += "</ul>";
+        }
+    } else {
+        iocsHtml = "Static IOC extraction only applies to file targets.";
+    }
+    document.getElementById('iocs').innerHTML = iocsHtml;
+
+    // MITRE + Remediation
+    let mitreHtml = "";
+    if (["file", "hash"].includes(report.target_type)) {
+        const techniques = ma.techniques || [];
+        if (!techniques.length) {
+            mitreHtml = "No static behavioral techniques matched. (Note: overall verdict above may still reflect VirusTotal detections even when no MITRE techniques are found — VT reflects real-world engine consensus, MITRE reflects static behavior only.)";
+        } else {
+            techniques.forEach((t, idx) => {
+                mitreHtml += `
+                <div class="technique-row" onclick="toggleSteps(${idx})">
+                    <b>[${t.technique_id}] ${t.technique_name}</b> — ${t.tactic} (${t.severity})<br>
+                    <small>Matched: ${t.matched_indicators.join(", ")}</small>
+                    <div class="steps" id="steps-${idx}">
+                        <h4>Detection</h4>
+                        <ul>${(t.detection_steps || []).map(s => `<li>${s}</li>`).join("")}</ul>
+                        <h4>Mitigation</h4>
+                        <ul>${(t.mitigation_steps || []).map(s => `<li>${s}</li>`).join("")}</ul>
+                    </div>
+                </div>`;
+            });
+        }
+    } else {
+        mitreHtml = (ma.note || "Not applicable for this target type.");
+    }
+    document.getElementById('mitre').innerHTML = mitreHtml;
+}
+
+function toggleSteps(idx) {
+    document.getElementById(`steps-${idx}`).classList.toggle('open');
+}
+</script>
+
+</body>
+</html>
